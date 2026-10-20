@@ -23,7 +23,7 @@ alpha = 0
 beta = 0
 #------------------------------------------------------------------------------- 
 
-class Loss(nn.Module):
+class VAELoss(nn.Module):
     def __init__(self):
         super().__init__()
         self.alpha = alpha
@@ -36,21 +36,33 @@ class Loss(nn.Module):
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         mae_loss = self.mae(x_, x)
 
-        # a * mae + (1 - a)(ssim_loss)
-        recon_loss = NotImplemented
-        # recon + b * kl
-        total_loss = NotImplemented
+        recon_loss = alpha * mae_loss + (1 - alpha) * ssim_loss
+        total_loss = recon_loss + beta * kl_loss
 
-        return total_loss, ssim_loss, kl_loss
+        return total_loss, mae_loss, ssim_loss, kl_loss
 
 #-------------------------------------------------------------------------------
 
-def train_vae(model, ldr, optim, dev, epochs, beta):
+def train_vae(model, ldr, loss, optim, dev, epochs):
     model.train()
 
     for epoch in range(epochs):
-        #TODO: per epoch train and loss calc 
-        pass
+        epoch_total, epoch_l1, epoch_kl, epoch_ssim = 0.0, 0.0, 0.0, 0.0
+
+        for mri in NotImplemented:
+            mri = mri.to(dev)
+
+            optim.zero_grad()
+            mri_, mu, logvar = model(mri)
+            total_l, mae_l, kl_l, ssim_l = loss(mri_, mri, mu, logvar) 
+
+            total_l.backward()            
+            optim.step()
+
+            epoch_total += total_l.item()
+            epoch_l1 += mae_l.item()
+            epoch_kl += kl_l.item()
+            epoch_ssim += ssim_l.item()
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -60,9 +72,16 @@ def main():
 
     model = LDMVAE(in_c=1, latent_c=latent_c).to(device)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
+    loss = VAELoss()
 
-    train_vae(model, "", optimiser, device, epochs=epochs, beta=beta)
-
+    train_vae(
+        model, 
+        ldr=NotImplemented, 
+        loss=loss, 
+        optim=optimiser, 
+        dev=device, 
+        epochs=epochs
+    )
 
 if __name__ == "__main__":
     main()
