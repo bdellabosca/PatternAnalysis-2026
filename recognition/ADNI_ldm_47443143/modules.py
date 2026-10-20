@@ -10,15 +10,45 @@ import torch.nn as nn
 
 #-------------------------------------------------------------------------------
 # VAE 
-class LDMVAE(nn.Module):
-    def __init__(self, ):
+class VAEBlock(nn.Module):
+    def __init__(self, blocktype, in_c, out_c, kern, groups=32):
         super().__init__()
-        self.encoder = nn.Sequential()
+        if blocktype == "E":
+            self.do = nn.Sequential(
+                nn.Conv2d(in_c, out_c, kernel_size=kern, stride=2, padding=1),
+                nn.GroupNorm(groups, out_c),
+                nn.SiLU()
+            )
+        elif blocktype == "D":
+            self.do = nn.Sequential(
+                nn.ConvTranspose2d(in_c, out_c, kernel_size=kern, stride=2, 
+                                   padding=1),
+                nn.GroupNorm(groups, out_c),
+                nn.SiLU()
+            )
 
-        self.mu = nn.Conv2d()
-        self.logvar = nn.Conv2d()
+    def forward(self, x):
+        return self.do(x)
+
+class LDMVAE(nn.Module):
+    def __init__(self, in_c=1, latent_c=4):
+        super().__init__()
+        self.encoder = nn.Sequential(
+            VAEBlock("E", in_c, 64, 4),
+            VAEBlock("E", 64, 128, 4),
+            VAEBlock("E", 128, 256, 4)
+        )
+
+        self.mu = nn.Conv2d(256, latent_c, kernel_size=1, padding=0)
+        self.logvar = nn.Conv2d(256, latent_c, kernel_size=1, padding=0)
         
-        self.decoder = nn.Sequential()
+        self.decoder = nn.Sequential(
+            nn.Conv2d(latent_c, 256, kernel_size=3, padding=1),
+            nn.SiLU(),
+            VAEBlock("D", 256, 128, 4),
+            VAEBlock("D", 128, 64, 4),
+            nn.ConvTranspose2d(64, in_c, kernel_size=4, stride=2, padding=1)
+        )
 
     def reparameterise(self, mu, logvar):
         sigma = torch.exp(0.5 * logvar)
