@@ -37,6 +37,10 @@ augment = transforms.Compose([
     transforms.ColorJitter(brightness=brightness, contrast=contrast)
 ])
 
+nil_transform = transforms.Compose([
+    transforms.ToTensor()
+])
+
 #-------------------------------------------------------------------------------
 
 class ADNIDataset(Dataset):
@@ -59,13 +63,13 @@ class ADNIDataset(Dataset):
 
     def __getitem__(self, ix):
         path, classification = self.slices[ix]
-        slice = Image.open(path)
+        slice = Image.open(path).convert("L")
         if self.transform: slice = self.transform(slice)
         return slice, classification
 
 #-------------------------------------------------------------------------------
-def get_test_ldr(base, batch_size, num_workers):
-    test_ds = ADNIDataset(base, path=test_path, transform=None)
+def get_test_ldr(base, batch_size=32, num_workers=4):
+    test_ds = ADNIDataset(base, path=test_path, transform=nil_transform)
     test_ldr = DataLoader(
         test_ds,
         batch_size=batch_size,
@@ -74,8 +78,8 @@ def get_test_ldr(base, batch_size, num_workers):
     )
     return test_ldr 
 
-def get_train_ldr(base, batch_size, num_workers): 
-    train_ds = ADNIDataset(base, path=train_path, transform=None)
+def get_train_ldr(base, batch_size=32, num_workers=4): 
+    train_ds = ADNIDataset(base, path=train_path, transform=augment)
     train_ldr = DataLoader(
         train_ds,
         batch_size=batch_size,

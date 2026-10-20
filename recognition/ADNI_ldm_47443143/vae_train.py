@@ -5,12 +5,14 @@ Authored by: Benigno Della Bosca
 Provides a training loop for the VAE component of the ldm model, can be trained
 distinct of other component architectures
 """
+import sys
 import torch
 import torch.nn as nn
 
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from modules import LDMVAE
+from adni_ldr import get_train_ldr
 
 # Hyperparameters
 #-------------------------------------------------------------------------------
@@ -24,7 +26,7 @@ beta = 0
 #------------------------------------------------------------------------------- 
 
 class VAELoss(nn.Module):
-    def __init__(self):
+    def __init__(self, alpha, beta):
         super().__init__()
         self.alpha = alpha
         self.beta = beta
@@ -39,17 +41,20 @@ class VAELoss(nn.Module):
         recon_loss = alpha * mae_loss + (1 - alpha) * ssim_loss
         total_loss = recon_loss + beta * kl_loss
 
-        return total_loss, mae_loss, ssim_loss, kl_loss
+        return total_loss, mae_loss, kl_loss, ssim_loss
 
 #-------------------------------------------------------------------------------
 
 def train_vae(model, ldr, loss, optim, dev, epochs):
     model.train()
+    
+    with open("loss.csv", "w", encoding="utf-8") as file:
+        file.write("epoch,total_loss,mae_loss,kl_loss,ssim_loss\n")
 
     for epoch in range(epochs):
         epoch_total, epoch_l1, epoch_kl, epoch_ssim = 0.0, 0.0, 0.0, 0.0
 
-        for mri in NotImplemented:
+        for mri, _ in ldr:
             mri = mri.to(dev)
 
             optim.zero_grad()
@@ -64,19 +69,31 @@ def train_vae(model, ldr, loss, optim, dev, epochs):
             epoch_kl += kl_l.item()
             epoch_ssim += ssim_l.item()
 
+        n_batches = len(ldr)
+        avg_total = epoch_total / n_batches
+        avg_l1 = epoch_l1 / n_batches
+        avg_kl = epoch_kl / n_batches
+        avg_ssim = epoch_ssim / n_batches
+
+        with open("loss.csv", "a", encoding="utf-8") as file:
+            file.write(f"{epoch+1},{avg_total:.6f},{avg_l1:.6f},"
+                f"{avg_kl:.6f},{avg_ssim:.6f}\n")
+
+    torch.save(model.state_dict(), 'vae_weights.pt')
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device :: {device}")
 
-    #TODO: needs loaders
+    train_ldr = get_train_ldr(sys.argv[1], batch_size=batch_size) # takes path as argument
 
     model = LDMVAE(in_c=1, latent_c=latent_c).to(device)
     optimiser = torch.optim.Adam(model.parameters(), lr=lr)
-    loss = VAELoss()
+    loss = VAELoss(alpha, beta).to(device)
 
     train_vae(
-        model, 
-        ldr=NotImplemented, 
+        model=model, 
+        ldr=train_ldr, 
         loss=loss, 
         optim=optimiser, 
         dev=device, 

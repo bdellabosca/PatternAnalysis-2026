@@ -8,18 +8,20 @@ model.
 import torch
 import torch.nn as nn
 
+ENCODE = 0
+DECODE = 1
 #-------------------------------------------------------------------------------
-# VAE 
+# VAE
 class VAEBlock(nn.Module):
     def __init__(self, blocktype, in_c, out_c, kern, groups=32):
         super().__init__()
-        if blocktype == "E":
+        if blocktype == ENCODE:
             self.do = nn.Sequential(
                 nn.Conv2d(in_c, out_c, kernel_size=kern, stride=2, padding=1),
                 nn.GroupNorm(groups, out_c),
                 nn.SiLU()
             )
-        elif blocktype == "D":
+        elif blocktype == DECODE:
             self.do = nn.Sequential(
                 nn.ConvTranspose2d(in_c, out_c, kernel_size=kern, stride=2, 
                                    padding=1),
@@ -34,9 +36,9 @@ class LDMVAE(nn.Module):
     def __init__(self, in_c=1, latent_c=4):
         super().__init__()
         self.encoder = nn.Sequential(
-            VAEBlock("E", in_c, 64, 4),
-            VAEBlock("E", 64, 128, 4),
-            VAEBlock("E", 128, 256, 4)
+            VAEBlock(ENCODE, in_c, 64, 4),
+            VAEBlock(ENCODE, 64, 128, 4),
+            VAEBlock(ENCODE, 128, 256, 4)
         )
 
         self.mu = nn.Conv2d(256, latent_c, kernel_size=1, padding=0)
@@ -45,8 +47,8 @@ class LDMVAE(nn.Module):
         self.decoder = nn.Sequential(
             nn.Conv2d(latent_c, 256, kernel_size=3, padding=1),
             nn.SiLU(),
-            VAEBlock("D", 256, 128, 4),
-            VAEBlock("D", 128, 64, 4),
+            VAEBlock(DECODE, 256, 128, 4),
+            VAEBlock(DECODE, 128, 64, 4),
             nn.ConvTranspose2d(64, in_c, kernel_size=4, stride=2, padding=1)
         )
 
