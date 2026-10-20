@@ -22,6 +22,21 @@ from PIL import Image
 train_path = "AD_NC/train"
 test_path = "AD_NC/test"
 
+rotation = (-5, 5)
+translation = (0.05, 0.05)
+brightness = 0.1
+contrast = 0.1
+
+# Transform
+#-------------------------------------------------------------------------------
+
+augment = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.RandomRotation(degrees=rotation, fill=0),
+    transforms.RandomAffine(degrees=0, translate=translation, fill=0),
+    transforms.ColorJitter(brightness=brightness, contrast=contrast)
+])
+
 #-------------------------------------------------------------------------------
 
 class ADNIDataset(Dataset):
