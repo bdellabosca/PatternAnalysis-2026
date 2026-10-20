@@ -8,33 +8,63 @@ transformations
 
 import os
 import re
-from typing import Any
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
+from PIL import Image
 
 #NOTE: Currently there is no patient level separation on dataset
 # DO NOT USE FOR FINAL MODEL
 
-# Paths
+# Parameters
 #-------------------------------------------------------------------------------
+
+train_path = "AD_NC/train"
+test_path = "AD_NC/test"
 
 #-------------------------------------------------------------------------------
 
 class ADNIDataset(Dataset):
-    def __init__(self):
-        pass
+    def __init__(self, base, path, transform):
+        self.transform = transform
+        self.cn_dir =  os.path.join(base, path, "CN")
+        self.ad_dir =  os.path.join(base, path, "AD")
+        self.slices = []
+
+        for file in os.listdir(self.cn_dir):
+            filepath = os.path.join(self.cn_dir, file)
+            self.slices.append((filepath,"CN"))
+
+        for file in os.listdir(self.ad_dir):
+            filepath = os.path.join(self.ad_dir, file)
+            self.slices.append((filepath, "AD"))
 
     def __len__(self):
-        pass
+        return len(self.slices)
 
     def __getitem__(self, ix):
-        pass
+        path, classification = self.slices[ix]
+        slice = Image.open(path)
+        if self.transform: slice = self.transform(slice)
+        return slice, classification
 
 #-------------------------------------------------------------------------------
+def get_test_ldr(base, batch_size, num_workers):
+    test_ds = ADNIDataset(base, path=test_path, transform=None)
+    test_ldr = DataLoader(
+        test_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers
+    )
+    return test_ldr 
 
-def get_test_ldr():
-    pass
-
-def get_train_ldr(): 
-    pass
+def get_train_ldr(base, batch_size, num_workers): 
+    train_ds = ADNIDataset(base, path=train_path, transform=None)
+    train_ldr = DataLoader(
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True, # random order per epoch
+        num_workers=num_workers
+    )
+    return train_ldr
