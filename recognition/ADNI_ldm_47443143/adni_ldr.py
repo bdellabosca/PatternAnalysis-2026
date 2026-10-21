@@ -46,13 +46,13 @@ nil_transform = transforms.Compose([
 class ADNIDataset(Dataset):
     def __init__(self, base, path, transform):
         self.transform = transform
-        self.cn_dir =  os.path.join(base, path, "CN")
+        self.nc_dir =  os.path.join(base, path, "NC")
         self.ad_dir =  os.path.join(base, path, "AD")
         self.slices = []
 
-        for file in os.listdir(self.cn_dir):
-            filepath = os.path.join(self.cn_dir, file)
-            self.slices.append((filepath,"CN"))
+        for file in os.listdir(self.nc_dir):
+            filepath = os.path.join(self.nc_dir, file)
+            self.slices.append((filepath,"NC"))
 
         for file in os.listdir(self.ad_dir):
             filepath = os.path.join(self.ad_dir, file)
@@ -68,13 +68,15 @@ class ADNIDataset(Dataset):
         return slice, classification
 
 #-------------------------------------------------------------------------------
+
 def get_test_ldr(base, batch_size=32, num_workers=4):
     test_ds = ADNIDataset(base, path=test_path, transform=nil_transform)
     test_ldr = DataLoader(
         test_ds,
         batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True
     )
     return test_ldr 
 
@@ -84,6 +86,7 @@ def get_train_ldr(base, batch_size=32, num_workers=4):
         train_ds,
         batch_size=batch_size,
         shuffle=True, # random order per epoch
-        num_workers=num_workers
+        num_workers=num_workers,
+        pin_memory=True
     )
     return train_ldr

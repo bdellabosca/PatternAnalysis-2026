@@ -18,11 +18,11 @@ from adni_ldr import get_train_ldr
 #-------------------------------------------------------------------------------
 latent_c = 4
 
-batch_size = 0
-lr = 0
-epochs = 0
-alpha = 0
-beta = 0
+batch_size = 32
+lr = 1e-4
+epochs = 50
+alpha = 0.8
+beta = 1e-5
 #------------------------------------------------------------------------------- 
 
 class VAELoss(nn.Module):
@@ -38,8 +38,8 @@ class VAELoss(nn.Module):
         kl_loss = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         mae_loss = self.mae(x_, x)
 
-        recon_loss = alpha * mae_loss + (1 - alpha) * ssim_loss
-        total_loss = recon_loss + beta * kl_loss
+        recon_loss = self.alpha * mae_loss + (1 - self.alpha) * ssim_loss
+        total_loss = recon_loss + self.beta * kl_loss
 
         return total_loss, mae_loss, kl_loss, ssim_loss
 
@@ -75,6 +75,9 @@ def train_vae(model, ldr, loss, optim, dev, epochs):
         avg_kl = epoch_kl / n_batches
         avg_ssim = epoch_ssim / n_batches
 
+        print(f"Epoch [{epoch+1}/{epochs}] | Loss: {avg_total:.4f} (L1:"
+              f"{avg_l1:.4f}, SSIM: {avg_ssim:.4f}, KL: {avg_kl:.4f})", flush=True)
+
         with open("loss.csv", "a", encoding="utf-8") as file:
             file.write(f"{epoch+1},{avg_total:.6f},{avg_l1:.6f},"
                 f"{avg_kl:.6f},{avg_ssim:.6f}\n")
@@ -88,7 +91,7 @@ def main():
     train_ldr = get_train_ldr(sys.argv[1], batch_size=batch_size) # takes path as argument
 
     model = LDMVAE(in_c=1, latent_c=latent_c).to(device)
-    optimiser = torch.optim.Adam(model.parameters(), lr=lr)
+    optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
     loss = VAELoss(alpha, beta).to(device)
 
     train_vae(
