@@ -27,14 +27,15 @@ translation = (0.05, 0.05)
 brightness = 0.1
 contrast = 0.1
 
+CLASSES = {"NC": 0.0, "AD": 1.0}
 # Transform
 #-------------------------------------------------------------------------------
 
 augment = transforms.Compose([
-    transforms.ToTensor(),
     transforms.RandomRotation(degrees=rotation, fill=0),
     transforms.RandomAffine(degrees=0, translate=translation, fill=0),
-    transforms.ColorJitter(brightness=brightness, contrast=contrast)
+    transforms.ColorJitter(brightness=brightness, contrast=contrast),
+    transforms.ToTensor()
 ])
 
 nil_transform = transforms.Compose([
@@ -65,7 +66,20 @@ class ADNIDataset(Dataset):
         path, classification = self.slices[ix]
         slice = Image.open(path).convert("L")
         if self.transform: slice = self.transform(slice)
-        return slice, classification
+
+        label = torch.tensor(CLASSES[classification], dtype=torch.float32)
+        return slice, label
+
+class ADNILatents(Dataset):
+    def __init__(self, latents, classes):
+        self.latents = latents
+        self.classes = classes
+
+    def __len__(self):
+        return len(self.latents)
+
+    def __getitem__(self, ix):
+        return self.latents[ix], self.classes[ix]
 
 #-------------------------------------------------------------------------------
 
@@ -90,3 +104,26 @@ def get_train_ldr(base, batch_size=32, num_workers=4):
         pin_memory=True
     )
     return train_ldr
+
+def get_latents_ldr(vae, ldr, dev, batch_size=32, shuffle=True):
+    with torch.no_grad():
+        vae.eval()
+        latents, classes = [], []
+ 
+        for slices, classification in ldr:
+            slices = slices.to(dev)
+            latent = vae.get_latent(slices)
+            latents.append(latent.cpu())
+            classes.append(classification)
+
+        latents = torch.cat(latents, dim=0)
+        classes = torch.cat(classes, dim=0)
+        latent_ds = ADNILatents(latents, classes)
+        latent_ldr = DataLoader(
+            latent_ds,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            pin_memory=True
+        )
+    return latent_ldr
+        

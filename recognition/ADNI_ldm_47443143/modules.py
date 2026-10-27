@@ -64,6 +64,11 @@ class LDMVAE(nn.Module):
     def decode(self, z):
         return self.decoder(z)
 
+    def get_latent(self, x):
+        mu, logvar = self.encode(x)
+        z = self.reparameterise(mu, logvar)
+        return z
+
     def forward(self, x):
         (mu, logvar) = self.encode(x)
         x_ = self.decode(self.reparameterise(mu, logvar))
