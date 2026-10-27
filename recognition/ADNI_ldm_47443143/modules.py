@@ -72,26 +72,59 @@ class LDMVAE(nn.Module):
 #-------------------------------------------------------------------------------
 # UNet
 class UNetBlock(nn.Module):
-    def __init__(self):
+    def __init__(self, in_c, out_c, condition):
         super().__init__()
-        self.do = nn.Sequential(
-            # conv
-            # norm
-            # activ fn
+        self.condition = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(condition, out_c)
         )
+        self.blk1 = nn.Sequential(
+            nn.GroupNorm(32, in_c),
+            nn.SiLU(),
+            nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
+        )
+        self.blk2 = nn.Sequential(
+            nn.GroupNorm(32, out_c),
+            nn.SiLU(),
+            nn.Conv2d(out_c, out_c, kernel_size=3, padding=1),
+        )
+        self.res = nn.Conv2d(in_c, out_c, kernel_size=1)
 
-    def forward(self):
-        return self.do
+    def forward(self, x, t):
+        h = self.blk1(x)
+        h = h + self.condition(t)[:, :, None, None]
+        h = self.blk2(h)
+        return (h + self.res(x))
 
 class LDMUNet(nn.Module):
-    def __init__(self):
+    def __init__(self, in_c=4, out_c=4, f=64, cond=256):
         super().__init__()
-        # down blocks
 
-        # conditioning mlp
+        # needs mlp for time conditoning
+        self.mlp = nn.Sequential(
+            nn.Linear(2, cond),
+            nn.SiLU(),
+            nn.Linear(cond, cond),
+            nn.SiLU()
+        )
 
-        # up blocks
+        # from latent space to features
+        self.from_latent = nn.Conv2d(in_c, f, kernel_size=3, padding=1)
 
-    def forward(self):
-        # down + maintain skip conns
+        # down
+
         # up
+
+        # from features back to latent
+        self.to_latent = nn.Sequential(
+            nn.GroupNorm(32, f),
+            nn.SiLU(),
+            nn.Conv2d(f, out_c, kernel_size=3, padding=1)
+        )
+
+    def forward(self, x, tstep, classification):
+        condition = torch.cat([tstep, classification], dim=-1)
+        condition = self.mlp(condition)
+
+        pass
+        
