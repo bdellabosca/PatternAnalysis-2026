@@ -32,6 +32,7 @@ CLASSES = {"NC": 0.0, "AD": 1.0}
 #-------------------------------------------------------------------------------
 
 augment = transforms.Compose([
+    transforms.Pad((0,8), fill=0),
     transforms.RandomRotation(degrees=rotation, fill=0),
     transforms.RandomAffine(degrees=0, translate=translation, fill=0),
     transforms.ColorJitter(brightness=brightness, contrast=contrast),
@@ -39,6 +40,7 @@ augment = transforms.Compose([
 ])
 
 nil_transform = transforms.Compose([
+    transforms.Pad((0,8), fill=0),
     transforms.ToTensor()
 ])
 
