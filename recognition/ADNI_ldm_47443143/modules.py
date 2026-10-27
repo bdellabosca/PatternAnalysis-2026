@@ -102,15 +102,15 @@ class UNetBlock(nn.Module):
         return (h + self.res(x))
 
 class LDMUNet(nn.Module):
-    def __init__(self, in_c=4, out_c=4, f=64, cond=256):
+    def __init__(self, in_c=4, out_c=4, f=64, cond=256, timesteps=1000):
         super().__init__()
-
+        self.time = nn.Embedding(timesteps, cond)
+        self.classes = nn.Embedding(2, cond) 
+            
         # needs mlp for time conditoning
         self.mlp = nn.Sequential(
-            nn.Linear(2, cond),
             nn.SiLU(),
             nn.Linear(cond, cond),
-            nn.SiLU()
         )
 
         # from latent space to features
@@ -128,7 +128,7 @@ class LDMUNet(nn.Module):
         )
 
     def forward(self, x, tstep, classification):
-        condition = torch.cat([tstep, classification], dim=-1)
+        condition = self.time(tstep) + self.classes(classification)
         condition = self.mlp(condition)
 
         pass

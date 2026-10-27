@@ -67,7 +67,7 @@ class ADNIDataset(Dataset):
         slice = Image.open(path).convert("L")
         if self.transform: slice = self.transform(slice)
 
-        label = torch.tensor(CLASSES[classification], dtype=torch.float32)
+        label = torch.tensor(CLASSES[classification], dtype=torch.long)
         return slice, label
 
 class ADNILatents(Dataset):
