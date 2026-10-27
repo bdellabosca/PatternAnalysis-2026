@@ -71,4 +71,27 @@ class LDMVAE(nn.Module):
 
 #-------------------------------------------------------------------------------
 # UNet
-# TODO:  Implement UNet architecture
+class UNetBlock(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.do = nn.Sequential(
+            # conv
+            # norm
+            # activ fn
+        )
+
+    def forward(self):
+        return self.do
+
+class LDMUNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # down blocks
+
+        # conditioning mlp
+
+        # up blocks
+
+    def forward(self):
+        # down + maintain skip conns
+        # up
