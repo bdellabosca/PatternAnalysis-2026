@@ -107,7 +107,6 @@ class LDMUNet(nn.Module):
         self.time = nn.Embedding(timesteps, cond)
         self.classes = nn.Embedding(2, cond) 
             
-        # needs mlp for time conditoning
         self.mlp = nn.Sequential(
             nn.SiLU(),
             nn.Linear(cond, cond),
@@ -117,8 +116,27 @@ class LDMUNet(nn.Module):
         self.from_latent = nn.Conv2d(in_c, f, kernel_size=3, padding=1)
 
         # down
+        self.d1 = UNetBlock(f,f,condition=cond)
+        self.down1 = nn.Conv2d(f, f, kernel_size=3, stride=2, padding=1)
+
+        self.d2 = UNetBlock(f, f * 2, condition=cond)
+        self.down2 = nn.Conv2d(f * 2, f * 2, kernel_size=3, stride=2, padding=1)
+
+        self.d3 = UNetBlock(f * 2 , f * 4, condition=cond)
+        self.down3 = nn.Conv2d(f * 4, f * 4, kernel_size=3, stride=2, padding=1)
+
+        # bottleneck
+        self.bottleneck = UNetBlock(f*4, f*8, condition=cond)
 
         # up
+        self.up1 = nn.ConvTranspose2d(f *8, f*4 ,kernel_size=4, stride=2, padding=1)
+        self.u1 = UNetBlock(f*8, f*4, condition=cond)
+
+        self.up2 = nn.ConvTranspose2d(f *4, f*2,kernel_size=4, stride=2, padding=1)
+        self.u2 = UNetBlock(f*4, f*2, condition=cond)
+        
+        self.up3 = nn.ConvTranspose2d(f * 2, f ,kernel_size=4, stride=2, padding=1)
+        self.u3 = UNetBlock(f*2, f, condition=cond)
 
         # from features back to latent
         self.to_latent = nn.Sequential(
@@ -131,5 +149,20 @@ class LDMUNet(nn.Module):
         condition = self.time(tstep) + self.classes(classification)
         condition = self.mlp(condition)
 
-        pass
+        x = self.from_latent(x)
+        d1 = self.d1(x, condition)
+        d2 = self.d2(self.down1(d1), condition)
+        d3 = self.d3(self.down2(d2), condition)
+
+        b = self.bottleneck(self.down3(d3), condition)
+
+        u1 = self.up1(b)
+        u1 = self.u1(torch.cat([u1, d3], dim=1), condition)
+
+        u2 = self.up2(u1)
+        u2 = self.u2(torch.cat([u2, d2], dim=1), condition)
         
+        u3 = self.up3(u2)
+        u3 = self.u3(torch.cat([u3, d1], dim=1), condition)
+
+        return self.to_latent(u3)
