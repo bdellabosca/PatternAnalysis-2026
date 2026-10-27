@@ -7,6 +7,7 @@ model.
 """
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 ENCODE = 0
 DECODE = 1
@@ -66,8 +67,7 @@ class LDMVAE(nn.Module):
 
     def get_latent(self, x):
         mu, logvar = self.encode(x)
-        z = self.reparameterise(mu, logvar)
-        return z
+        return mu
 
     def forward(self, x):
         (mu, logvar) = self.encode(x)
@@ -129,13 +129,22 @@ class LDMUNet(nn.Module):
         self.bottleneck = UNetBlock(f*4, f*8, condition=cond)
 
         # up
-        self.up1 = nn.ConvTranspose2d(f *8, f*4 ,kernel_size=4, stride=2, padding=1)
+        self.up1 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="biliniear"),
+            nn.Conv2d(f*8, f*4, kernel_size=3, padding=1)
+        )
         self.u1 = UNetBlock(f*8, f*4, condition=cond)
 
-        self.up2 = nn.ConvTranspose2d(f *4, f*2,kernel_size=4, stride=2, padding=1)
+        self.up2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="biliniear"),
+            nn.Conv2d(f*4, f*2, kernel_size=3, padding=1)
+        )
         self.u2 = UNetBlock(f*4, f*2, condition=cond)
         
-        self.up3 = nn.ConvTranspose2d(f * 2, f ,kernel_size=4, stride=2, padding=1)
+        self.up3 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode="biliniear"),
+            nn.Conv2d(f*2, f, kernel_size=3, padding=1)
+        )
         self.u3 = UNetBlock(f*2, f, condition=cond)
 
         # from features back to latent
@@ -146,7 +155,7 @@ class LDMUNet(nn.Module):
         )
 
     def forward(self, x, tstep, classification):
-        condition = self.time(tstep) + self.classes(classification)
+        condition = self.time(tstep.view(-1).long()) + self.classes(classification.view(-1).long())
         condition = self.mlp(condition)
 
         x = self.from_latent(x)
@@ -157,12 +166,18 @@ class LDMUNet(nn.Module):
         b = self.bottleneck(self.down3(d3), condition)
 
         u1 = self.up1(b)
+        if u1.shape[2:] != d3.shape[2:]:
+            u1 = F.interpolate(u1, size=d3.shape[2:], mode="nearest")
         u1 = self.u1(torch.cat([u1, d3], dim=1), condition)
 
         u2 = self.up2(u1)
+        if u2.shape[2:] != d2.shape[2:]:
+            u2 = F.interpolate(u2, size=d2.shape[2:], mode="nearest")
         u2 = self.u2(torch.cat([u2, d2], dim=1), condition)
         
         u3 = self.up3(u2)
+        if u3.shape[2:] != d1.shape[2:]:
+            u3 = F.interpolate(u3, size=d1.shape[2:], mode="nearest")
         u3 = self.u3(torch.cat([u3, d1], dim=1), condition)
 
         return self.to_latent(u3)
