@@ -6,9 +6,11 @@ Provides a training loop for the VAE component of the ldm model, can be trained
 distinct of other component architectures
 """
 import sys
+import time
 import torch
 import torch.nn as nn
 
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from modules import LDMVAE
@@ -20,7 +22,7 @@ latent_c = 4
 
 batch_size = 32
 lr = 1e-4
-epochs = 50
+epochs = 40
 alpha = 0.8
 beta = 1e-5
 #------------------------------------------------------------------------------- 
@@ -45,10 +47,11 @@ class VAELoss(nn.Module):
 
 #-------------------------------------------------------------------------------
 
-def train_vae(model, ldr, loss, optim, dev, epochs):
+def train_vae(model, ldr, loss, optim, dev, epochs, sched):
     model.train()
+    start_time = time.time()
     
-    with open("loss.csv", "w", encoding="utf-8") as file:
+    with open("vae_loss.csv", "w", encoding="utf-8") as file:
         file.write("epoch,total_loss,mae_loss,kl_loss,ssim_loss\n")
 
     for epoch in range(epochs):
@@ -75,14 +78,18 @@ def train_vae(model, ldr, loss, optim, dev, epochs):
         avg_kl = epoch_kl / n_batches
         avg_ssim = epoch_ssim / n_batches
 
-        print(f"Epoch [{epoch+1}/{epochs}] | Loss: {avg_total:.4f} (L1:"
+        elapsed = time.time() - start_time
+        timef = time.strftime("%H:%M:%S", time.gmtime(elapsed))
+
+        print(f"Epoch [{epoch+1}/{epochs}] {timef} | Loss: {avg_total:.4f} (L1:"
               f"{avg_l1:.4f}, SSIM: {avg_ssim:.4f}, KL: {avg_kl:.4f})", flush=True)
 
         with open("loss.csv", "a", encoding="utf-8") as file:
             file.write(f"{epoch+1},{avg_total:.6f},{avg_l1:.6f},"
                 f"{avg_kl:.6f},{avg_ssim:.6f}\n")
 
-    torch.save(model.state_dict(), 'vae_weights.pt')
+        sched.step()
+
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -92,6 +99,7 @@ def main():
 
     model = LDMVAE(in_c=1, latent_c=latent_c).to(device)
     optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
+    scheduler = CosineAnnealingLR(optimiser, T_max=epochs, eta_min=1e-6)
     loss = VAELoss(alpha, beta).to(device)
 
     train_vae(
@@ -100,8 +108,11 @@ def main():
         loss=loss, 
         optim=optimiser, 
         dev=device, 
-        epochs=epochs
+        epochs=epochs,
+        sched=scheduler
     )
+
+    torch.save(model.state_dict(), 'vae_weights.pt')
 
 if __name__ == "__main__":
     main()

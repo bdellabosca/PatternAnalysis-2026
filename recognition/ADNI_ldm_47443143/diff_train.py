@@ -10,6 +10,7 @@ import time
 import torch
 import torch.nn as nn
 
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from modules import LDMUNet, LDMVAE
 from adni_ldr import get_train_ldr, get_latents_ldr
 
@@ -29,7 +30,7 @@ class UNetLoss(nn.Module):
         return self.mse(noise, expected_noise)
 
 #-------------------------------------------------------------------------------
-def train_unet(model, ldr, loss, optim, dev, epochs):
+def train_unet(model, ldr, loss, optim, dev, epochs, sched):
     model.train()
     start_time = time.time()
 
@@ -71,6 +72,8 @@ def train_unet(model, ldr, loss, optim, dev, epochs):
         with open("unet_loss.csv", "a", encoding="utf-8") as file:
             file.write(f"{epoch+1}, {avg_loss:.6f}\n")
 
+        sched.step()
+
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device :: {device}")
@@ -84,6 +87,7 @@ def main():
 
     model = LDMUNet().to(device)
     optimiser = torch.optim.AdamW(model.parameters(), lr=lr)
+    scheduler = CosineAnnealingLR(optimiser, T_max=epochs, eta_min=1e-6)
     loss = UNetLoss().to(device)
 
     train_unet(
@@ -92,7 +96,8 @@ def main():
         loss=loss,
         optim=optimiser,
         dev=device,
-        epochs=epochs
+        epochs=epochs,
+        sched=scheduler
     )
 
     torch.save(model.state_dict(), 'unet_weights.pt')
