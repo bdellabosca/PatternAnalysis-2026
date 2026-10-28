@@ -153,49 +153,42 @@ def main():
     print(f"Using device :: {device}")
     
     train_ldr = get_train_ldr(sys.argv[1], batch_size=batch_size) # takes path as argument
+    weights = 'vae_weights.pt'
 
     if (sys.argv[2] == "--vae"):
-
         model = LDMVAE(in_c=1, latent_c=latent_c).to(device)
         optimiser = torch.optim.AdamW(model.parameters(), lr=vae_lr)
         scheduler = CosineAnnealingLR(optimiser, T_max=vae_epochs, eta_min=1e-6)
         loss = VAELoss(vae_alpha, vae_beta).to(device)
-
-        train_vae(
-            model=model, 
-            ldr=train_ldr, 
-            loss=loss, 
-            optim=optimiser, 
-            dev=device, 
-            epochs=vae_epochs,
-            sched=scheduler
-        )
-
-        torch.save(model.state_dict(), 'vae_weights.pt')
+        loader = train_ldr
+        train_fn = train_vae
 
     elif (sys.argv[2] == "--unet"):
         vae = LDMVAE(in_c=1, latent_c=4).to(device)
-        vae.load_state_dict(torch.load("vae_weights.pt", map_location=device))
+        vae.load_state_dict(torch.load(weights, map_location=device))
         vae.eval()
 
         latent_ldr = get_latents_ldr(vae, train_ldr, dev=device, batch_size=batch_size)
+        weights = "unet_weights.pt"
 
         model = LDMUNet().to(device)
         optimiser = torch.optim.AdamW(model.parameters(), lr=unet_lr)
         scheduler = CosineAnnealingLR(optimiser, T_max=unet_epochs, eta_min=1e-6)
         loss = UNetLoss().to(device)
+        loader = latent_ldr
+        train_fn = train_unet
 
-        train_unet(
-            model=model,
-            ldr=latent_ldr,
-            loss=loss,
-            optim=optimiser,
-            dev=device,
-            epochs=unet_epochs,
-            sched=scheduler
-        )
+    train_fn(
+        model=model,
+        ldr=loader,
+        loss=loss,
+        optim=optimiser,
+        dev=device,
+        epochs=unet_epochs,
+        sched=scheduler
+    )
 
-        torch.save(model.state_dict(), 'unet_weights.pt')
+    torch.save(model.state_dict(), 'unet_weights.pt')
 
 if __name__ == "__main__":
     main()
