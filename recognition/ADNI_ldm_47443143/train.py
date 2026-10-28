@@ -15,7 +15,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 from modules import LDMVAE, LDMUNet
-from adni_ldr import get_train_ldr, get_latents_ldr
+from dataset import get_train_ldr, get_latents_ldr
 
 # Hyperparameters
 #-------------------------------------------------------------------------------
@@ -151,9 +151,10 @@ def train_unet(model, ldr, loss, optim, dev, epochs, sched):
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device :: {device}")
+    
+    train_ldr = get_train_ldr(sys.argv[1], batch_size=batch_size) # takes path as argument
 
     if (sys.argv[2] == "--vae"):
-        train_ldr = get_train_ldr(sys.argv[1], batch_size=batch_size) # takes path as argument
 
         model = LDMVAE(in_c=1, latent_c=latent_c).to(device)
         optimiser = torch.optim.AdamW(model.parameters(), lr=vae_lr)
@@ -177,7 +178,6 @@ def main():
         vae.load_state_dict(torch.load("vae_weights.pt", map_location=device))
         vae.eval()
 
-        train_ldr = get_train_ldr(sys.argv[1], batch_size=batch_size)
         latent_ldr = get_latents_ldr(vae, train_ldr, dev=device, batch_size=batch_size)
 
         model = LDMUNet().to(device)

@@ -1,9 +1,10 @@
 """
-ADNI_ldr.py
+dataset.py
 Authored by: Benigno Della Bosca
 
 Provides an interface for loading ADNI MR images, as well as per epoch
-transformations
+transformations. Also implements Latent space pre-encoding for usage in unet
+training
 """
 
 import os
@@ -28,7 +29,8 @@ brightness = 0.1
 contrast = 0.1
 
 CLASSES = {"NC": 0.0, "AD": 1.0}
-# Transform
+
+# Transforms
 #-------------------------------------------------------------------------------
 
 augment = transforms.Compose([
@@ -44,6 +46,7 @@ nil_transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
+# Datasets
 #-------------------------------------------------------------------------------
 
 class ADNIDataset(Dataset):
@@ -83,6 +86,7 @@ class ADNILatents(Dataset):
     def __getitem__(self, ix):
         return self.latents[ix], self.classes[ix]
 
+# Loaders
 #-------------------------------------------------------------------------------
 
 def get_test_ldr(base, batch_size=32, num_workers=4):
@@ -120,6 +124,13 @@ def get_latents_ldr(vae, ldr, dev, batch_size=32, shuffle=True):
 
         latents = torch.cat(latents, dim=0)
         classes = torch.cat(classes, dim=0)
+
+        raw_std = latents.std().item()
+        scale = 1.0 / raw_std
+        print(f"[Latent Norm] Raw std: {raw_std:.4f} | Scale: {scale:.4f}")
+
+        latents = latents * scale
+
         latent_ds = ADNILatents(latents, classes)
         latent_ldr = DataLoader(
             latent_ds,
