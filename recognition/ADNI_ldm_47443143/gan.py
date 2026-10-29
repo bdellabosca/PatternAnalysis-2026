@@ -12,6 +12,7 @@ import sys
 import time
 import torch
 import torch.nn as nn
+import matplotlib.pyplot as plt
 
 from dataset import get_train_ldr
 
@@ -22,7 +23,7 @@ z_dim = 256
 batch_size = 64
 epochs = 50
 lr_g = 2e-4
-lr_d = 2e-4
+lr_d = 5e-5
 
 # Generator
 #-------------------------------------------------------------------------------
@@ -99,6 +100,14 @@ class Discriminator(nn.Module):
         return self.discrim(x).view(-1)
 
 #-------------------------------------------------------------------------------
+def sample(gen, dev):
+    with torch.no_grad():
+        noise = torch.randn(1, z_dim, 1, 1, device=dev)
+        sample = gen(noise)
+        sample = ((sample + 1.0) / 2.0).clamp(0.0, 1.0).squeeze().cpu().numpy()
+        plt.imsave("gan_sample.png", sample, cmap="gray")
+    pass
+
 def train_gan(gen, discrim, ldr, loss, opt_g, opt_d, dev, epochs):
     gen.train()
     discrim.train()
@@ -174,6 +183,11 @@ def main():
         epochs=epochs,
         dev=device
     )
+
+    torch.save(gen.state_dict(), "generator_weights.pt")
+    torch.save(discrim.state_dict(), "discriminator_weights.pt")
+
+    sample(gen=gen, dev=device)
 
 if __name__ == "__main__":
     main()
