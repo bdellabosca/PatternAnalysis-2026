@@ -20,15 +20,18 @@ from dataset import get_train_ldr, get_latents_ldr
 # Hyperparameters
 #-------------------------------------------------------------------------------
 latent_c = 4
-batch_size = 32
+batch_size = 64
 
 vae_lr = 1e-4
-vae_epochs = 40
-vae_alpha = 0.8
+vae_epochs = 100
+vae_alpha = 0.5
 vae_beta = 1e-5
+vae_eta_min = 1e-5
 
-unet_epochs = 150
+unet_epochs = 300
 unet_lr = 2e-4
+unet_beta = 0.03
+unet_eta_min = 2e-5
 
 # Loss functions
 #------------------------------------------------------------------------------- 
@@ -51,9 +54,9 @@ class VAELoss(nn.Module):
         return total_loss, mae_loss, kl_loss, ssim_loss
 
 class UNetLoss(nn.Module):
-    def __init__(self):
+    def __init__(self, unet_beta):
         super().__init__()
-        self.mse = nn.MSELoss()
+        self.mse = nn.SmoothL1Loss(unet_beta)
 
     def forward(self, noise, expected_noise):
         return self.mse(noise, expected_noise)
@@ -98,7 +101,7 @@ def train_vae(model, ldr, loss, optim, dev, epochs, sched):
         print(f"Epoch [{epoch+1}/{epochs}] {timef} | Loss: {avg_total:.4f} (L1:"
               f"{avg_l1:.4f}, SSIM: {avg_ssim:.4f}, KL: {avg_kl:.4f})", flush=True)
 
-        with open("loss.csv", "a", encoding="utf-8") as file:
+        with open("vae_loss.csv", "a", encoding="utf-8") as file:
             file.write(f"{epoch+1},{avg_total:.6f},{avg_l1:.6f},"
                 f"{avg_kl:.6f},{avg_ssim:.6f}\n")
 
@@ -118,7 +121,7 @@ def train_unet(model, ldr, loss, optim, dev, epochs, sched):
             classes = classes.to(dev)
 
             # random 1000 t step tensor
-            t = torch.randint(0, 1000, (latents.size(0), 1), device=dev)
+            t = torch.randint(1, 1000, (latents.size(0),), device=dev)
 
             noise = torch.randn_like(latents)
 
@@ -127,13 +130,13 @@ def train_unet(model, ldr, loss, optim, dev, epochs, sched):
             latent_noise = torch.sqrt(1.0 - s) * latents + torch.sqrt(s) * noise
 
             noise_guess = model(latent_noise, t, classes) 
-            mse_loss = loss(noise_guess, noise)
+            sl1_loss = loss(noise_guess, noise)
 
             optim.zero_grad()
-            mse_loss.backward()
+            sl1_loss.backward()
             optim.step()
 
-            total_loss += mse_loss.item()
+            total_loss += sl1_loss.item()
 
         n_batches = len(ldr)
         avg_loss = total_loss / n_batches
@@ -158,10 +161,11 @@ def main():
     if (sys.argv[2] == "--vae"):
         model = LDMVAE(in_c=1, latent_c=latent_c).to(device)
         optimiser = torch.optim.AdamW(model.parameters(), lr=vae_lr)
-        scheduler = CosineAnnealingLR(optimiser, T_max=vae_epochs, eta_min=1e-6)
+        scheduler = CosineAnnealingLR(optimiser, T_max=vae_epochs, eta_min=vae_eta_min)
         loss = VAELoss(vae_alpha, vae_beta).to(device)
         loader = train_ldr
         train_fn = train_vae
+        epochs = vae_epochs
 
     elif (sys.argv[2] == "--unet"):
         vae = LDMVAE(in_c=1, latent_c=4).to(device)
@@ -173,10 +177,11 @@ def main():
 
         model = LDMUNet().to(device)
         optimiser = torch.optim.AdamW(model.parameters(), lr=unet_lr)
-        scheduler = CosineAnnealingLR(optimiser, T_max=unet_epochs, eta_min=1e-6)
-        loss = UNetLoss().to(device)
+        scheduler = CosineAnnealingLR(optimiser, T_max=unet_epochs, eta_min=unet_eta_min)
+        loss = UNetLoss(unet_beta).to(device)
         loader = latent_ldr
         train_fn = train_unet
+        epochs = unet_epochs
 
     train_fn(
         model=model,
@@ -184,11 +189,11 @@ def main():
         loss=loss,
         optim=optimiser,
         dev=device,
-        epochs=unet_epochs,
+        epochs=epochs,
         sched=scheduler
     )
 
-    torch.save(model.state_dict(), 'unet_weights.pt')
+    torch.save(model.state_dict(), weights)
 
 if __name__ == "__main__":
     main()

@@ -11,8 +11,10 @@ import torch.nn.functional as F
 
 ENCODE = 0
 DECODE = 1
-#-------------------------------------------------------------------------------
+
 # VAE
+#-------------------------------------------------------------------------------
+
 class VAEBlock(nn.Module):
     def __init__(self, blocktype, in_c, out_c, kern, groups=32):
         super().__init__()
@@ -24,8 +26,8 @@ class VAEBlock(nn.Module):
             )
         elif blocktype == DECODE:
             self.do = nn.Sequential(
-                nn.ConvTranspose2d(in_c, out_c, kernel_size=kern, stride=2, 
-                                   padding=1),
+                nn.Upsample(scale_factor=2, mode="bilinear"),
+                nn.Conv2d(in_c, out_c, kernel_size=3, padding=1),
                 nn.GroupNorm(groups, out_c),
                 nn.SiLU()
             )
@@ -50,7 +52,8 @@ class LDMVAE(nn.Module):
             nn.SiLU(),
             VAEBlock(DECODE, 256, 128, 4),
             VAEBlock(DECODE, 128, 64, 4),
-            nn.ConvTranspose2d(64, in_c, kernel_size=4, stride=2, padding=1)
+            nn.Upsample(scale_factor=2, mode="bilinear"),
+            nn.Conv2d(64, in_c, kernel_size=3, padding=1)
         )
 
     def reparameterise(self, mu, logvar):
@@ -74,8 +77,10 @@ class LDMVAE(nn.Module):
         x_ = self.decode(self.reparameterise(mu, logvar))
         return (x_, mu, logvar)
 
-#-------------------------------------------------------------------------------
+
 # UNet
+#-------------------------------------------------------------------------------
+
 class UNetBlock(nn.Module):
     def __init__(self, in_c, out_c, condition):
         super().__init__()
@@ -102,7 +107,7 @@ class UNetBlock(nn.Module):
         return (h + self.res(x))
 
 class LDMUNet(nn.Module):
-    def __init__(self, in_c=4, out_c=4, f=64, cond=256, timesteps=1000):
+    def __init__(self, in_c=4, out_c=4, f=96, cond=256, timesteps=1000):
         super().__init__()
         self.time = nn.Embedding(timesteps, cond)
         self.classes = nn.Embedding(2, cond) 
@@ -126,23 +131,24 @@ class LDMUNet(nn.Module):
         self.down3 = nn.Conv2d(f * 4, f * 4, kernel_size=3, stride=2, padding=1)
 
         # bottleneck
-        self.bottleneck = UNetBlock(f*4, f*8, condition=cond)
+        self.b1 = UNetBlock(f*4, f*8, condition=cond)
+        self.b2 = UNetBlock(f*8, f*8, condition=cond)
 
         # up
         self.up1 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="biliniear"),
+            nn.Upsample(scale_factor=2, mode="bilinear"),
             nn.Conv2d(f*8, f*4, kernel_size=3, padding=1)
         )
         self.u1 = UNetBlock(f*8, f*4, condition=cond)
 
         self.up2 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="biliniear"),
+            nn.Upsample(scale_factor=2, mode="bilinear"),
             nn.Conv2d(f*4, f*2, kernel_size=3, padding=1)
         )
         self.u2 = UNetBlock(f*4, f*2, condition=cond)
         
         self.up3 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode="biliniear"),
+            nn.Upsample(scale_factor=2, mode="bilinear"),
             nn.Conv2d(f*2, f, kernel_size=3, padding=1)
         )
         self.u3 = UNetBlock(f*2, f, condition=cond)
@@ -155,7 +161,8 @@ class LDMUNet(nn.Module):
         )
 
     def forward(self, x, tstep, classification):
-        condition = self.time(tstep.view(-1).long()) + self.classes(classification.view(-1).long())
+        condition = self.time(tstep.view(-1).long()) + self.classes(
+            classification.view(-1).long())
         condition = self.mlp(condition)
 
         x = self.from_latent(x)
@@ -163,9 +170,10 @@ class LDMUNet(nn.Module):
         d2 = self.d2(self.down1(d1), condition)
         d3 = self.d3(self.down2(d2), condition)
 
-        b = self.bottleneck(self.down3(d3), condition)
+        b1 = self.b1(self.down3(d3), condition)
+        b2 = self.b2(b1, condition)
 
-        u1 = self.up1(b)
+        u1 = self.up1(b2)
         if u1.shape[2:] != d3.shape[2:]:
             u1 = F.interpolate(u1, size=d3.shape[2:], mode="nearest")
         u1 = self.u1(torch.cat([u1, d3], dim=1), condition)
