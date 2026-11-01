@@ -2,190 +2,140 @@
 predict.py
 Authored by: Gemini 3.8
 
-Prediction and evaluation script for synthesized ADNI sagittal brain MRI slices.
-Runs generation and evaluation across both LDM and DCGAN baselines when called:
-- 5x5 Grid generation & single image output
-- Diversity check (Pairwise SSIM)
-- Memorization check (Nearest-Neighbor SSIM against real training slices)
-
-Optimized with GPU-vectorized SSIM to accelerate the memorization check from minutes to seconds.
+Image generation pipeline and class conditioning check for ADNI brain MRI slices.
+- python predict.py [n_per_class]: Synthesizes cohorts to 'ldm_out/{NC,AD}/' and 'gan/'
+- python predict.py --check [seed]: Generates side-by-side counterfactual plot (class_check.png)
 """
 
 import os
+import sys
 import numpy as np
+from PIL import Image
 import torch
-import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader
 
 from modules import LDMVAE, LDMUNet
 from gan import Generator
-from dataset import ADNIDataset, nil_transform, train_path
 
-# -----------------------------------------------------------------------------
+SCALE = 0.82
+Z_DIM = 256
+LDM_DIR = "ldm_out"
+GAN_DIR = "gan_out"
 
-MODELS = ["LDM", "GAN"]  # Evaluates both models sequentially
-SCALE = 0.82             # Latent scale factor for LDM VAE
-Z_DIM = 256              # Noise dimension for GAN
-DATA_DIR = "ADNI"        # Base dataset directory
+def load_models(dev):
+    """Loads trained VAE and UNet models in eval mode."""
+    vae = LDMVAE(in_c=1, latent_c=4).to(dev)
+    vae.load_state_dict(torch.load("vae_weights.pt", map_location=dev))
+    vae.eval()
 
-# -----------------------------------------------------------------------------
+    unet = LDMUNet(in_c=4, out_c=4, cond=256, timesteps=1000).to(dev)
+    unet.load_state_dict(torch.load("unet_weights.pt", map_location=dev))
+    unet.eval()
+    return vae, unet
 
-def fast_ssim_batch(img1, img2):
-    """
-    Computes paired SSIM between batches (B, 1, H, W) directly on GPU in a single kernel.
-    Returns a 1D tensor of shape (B,).
-    """
-    coords = torch.arange(11, dtype=torch.float32, device=img1.device) - 5.0
-    g = torch.exp(-0.5 * (coords / 1.5) ** 2)
-    window = (g[:, None] * g[None, :]).unsqueeze(0).unsqueeze(0)
-    window = window / window.sum()
+@torch.no_grad()
+def p_sample(unet, vae, class_val, dev, z_init=None, seed=None):
+    """Reverse DDPM sampling for LDM conditioned on class_val (0=NC, 1=AD)."""
+    if seed is not None:
+        torch.manual_seed(seed)
+        if dev.type == "cuda":
+            torch.cuda.manual_seed(seed)
 
-    mu1 = F.conv2d(img1, window, padding=5)
-    mu2 = F.conv2d(img2, window, padding=5)
-    mu1_sq, mu2_sq, mu1_mu2 = mu1.pow(2), mu2.pow(2), mu1 * mu2
+    z = z_init.clone() if z_init is not None else torch.randn((1, 4, 32, 32), device=dev)
+    c = torch.tensor([class_val], device=dev, dtype=torch.long)
 
-    sig1_sq = F.conv2d(img1 * img1, window, padding=5) - mu1_sq
-    sig2_sq = F.conv2d(img2 * img2, window, padding=5) - mu2_sq
-    sig12 = F.conv2d(img1 * img2, window, padding=5) - mu1_mu2
+    for step in reversed(range(1000)):
+        t = torch.tensor([step], device=dev, dtype=torch.long)
+        a_bar_t = 1.0 - (step / 1000.0)
+        a_bar_prev = 1.0 - ((step - 1) / 1000.0) if step > 0 else 1.0
+        a_t = a_bar_t / a_bar_prev
+        beta_t = 1.0 - a_t
 
-    c1, c2 = 0.01 ** 2, 0.03 ** 2
-    ssim = ((2.0 * mu1_mu2 + c1) * (2.0 * sig12 + c2)) / ((mu1_sq + mu2_sq + c1) * (sig1_sq + sig2_sq + c2))
-    return ssim.mean(dim=[1, 2, 3])
+        eps = unet(z, t, c)
+        mu = (1.0 / (a_t ** 0.5)) * (z - (beta_t / ((1.0 - a_bar_t + 1e-8) ** 0.5)) * eps)
+        var = ((1.0 - a_bar_prev) / (1.0 - a_bar_t + 1e-8)) * beta_t if step > 0 else 0.0
+        z = mu + (var ** 0.5) * torch.randn_like(z) if step > 0 else mu
 
-def rev_diff(unet, vae, dev):
-    with torch.no_grad():
-        z = torch.randn((1, 4, 32, 32), device=dev)
-        c = torch.tensor([0], device=dev, dtype=torch.long)
+    return vae.decode(z / SCALE).clamp(0.0, 1.0).squeeze().cpu().numpy()
 
-        for step in reversed(range(1000)):
-            t = torch.tensor([step], device=dev, dtype=torch.long)
+@torch.no_grad()
+def gan_sample(gen, dev):
+    """Samples from DCGAN generator."""
+    noise = torch.randn(1, Z_DIM, 1, 1, device=dev)
+    return ((gen(noise) + 1.0) / 2.0).clamp(0.0, 1.0).squeeze().cpu().numpy()
 
-            a_bar_t = 1.0 - (step / 1000.0)
-            a_bar_prev = 1.0 - ((step - 1) / 1000.0) if step > 0 else 1.0
-            a_t = a_bar_t / a_bar_prev
-            beta_t = 1.0 - a_t
+def generate_cohort(dev, n_per_class=25):
+    """Generates synthetic slices to disk folders: 'ldm_out/{NC,AD}/' and 'gan/'."""
+    print(f"Generating LDM ({n_per_class} NC + {n_per_class} AD) to '{LDM_DIR}/'...")
+    os.makedirs(f"{LDM_DIR}/NC", exist_ok=True)
+    os.makedirs(f"{LDM_DIR}/AD", exist_ok=True)
 
-            eps = unet(z, t, c)
-            mu = (1.0 / (a_t ** 0.5)) * (z - (beta_t / ((1.0 - a_bar_t + 1e-8) ** 0.5)) * eps)
+    vae, unet = load_models(dev)
 
-            if step > 0:
-                var = ((1.0 - a_bar_prev) / (1.0 - a_bar_t + 1e-8)) * beta_t
-                z = mu + (var ** 0.5) * torch.randn_like(z)
-            else:
-                z = mu
+    for c_idx, c_name in [(0, "NC"), (1, "AD")]:
+        for i in range(n_per_class):
+            img = p_sample(unet, vae, c_idx, dev)
+            Image.fromarray((img * 255).astype(np.uint8)).save(f"{LDM_DIR}/{c_name}/ldm_{i}.png")
 
-        synth = vae.decode(z / SCALE).clamp(0.0, 1.0).squeeze().cpu().numpy()
-    return synth
-
-
-def gan_sample(gen, dev, z_dim=Z_DIM):
-    with torch.no_grad():
-        noise = torch.randn(1, z_dim, 1, 1, device=dev)
-        fake = gen(noise)
-        synth = ((fake + 1.0) / 2.0).clamp(0.0, 1.0).squeeze().cpu().numpy()
-    return synth
-
-# -----------------------------------------------------------------------------
-
-def generate_grid(model_type, dev, rows=5, cols=5):
-    total_samples = rows * cols
-    sample_list = []
-
-    if model_type.upper() == "LDM":
-        vae = LDMVAE(in_c=1, latent_c=4).to(dev)
-        vae.load_state_dict(torch.load("vae_weights.pt", map_location=dev))
-        vae.eval()
-
-        unet = LDMUNet(in_c=4, out_c=4, cond=256, timesteps=1000).to(dev)
-        unet.load_state_dict(torch.load("unet_weights.pt", map_location=dev))
-        unet.eval()
-
-        for idx in range(total_samples):
-            img = rev_diff(unet=unet, vae=vae, dev=dev)
-            sample_list.append(img)
-
-    elif model_type.upper() == "GAN":
+    if os.path.exists("generator_weights.pt"):
+        print(f"Generating DCGAN ({n_per_class * 2} samples) to '{GAN_DIR}/'...")
+        os.makedirs(GAN_DIR, exist_ok=True)
         gen = Generator(z_dim=Z_DIM).to(dev)
         gen.load_state_dict(torch.load("generator_weights.pt", map_location=dev))
         gen.eval()
+        for i in range(n_per_class * 2):
+            img = gan_sample(gen, dev)
+            Image.fromarray((img * 255).astype(np.uint8)).save(f"{GAN_DIR}/gan_{i}.png")
 
-        for idx in range(total_samples):
-            img = gan_sample(gen=gen, dev=dev, z_dim=Z_DIM)
-            sample_list.append(img)
+    print("[Done] Generation complete. Saved directly to folders.")
 
-    grid = np.block([[sample_list[r * cols + c] for c in range(cols)] for r in range(rows)])
-    return grid, sample_list
+def class_check(dev, seed=42, out_file="class_check.png"):
+    """Fixed-seed counterfactual class conditioning comparison (NC vs AD)."""
+    vae, unet = load_models(dev)
 
-# -----------------------------------------------------------------------------
+    torch.manual_seed(seed)
+    if dev.type == "cuda":
+        torch.cuda.manual_seed(seed)
+    z_init = torch.randn((1, 4, 32, 32), device=dev)
 
-def evaluate_model(model_type, samples, dev, train_loader=None):
-    """
-    Fast GPU-vectorized evaluation of:
-    1. Pairwise SSIM (Diversity check across all 300 sample pairs)
-    2. Nearest-Neighbor SSIM (Memorization check against real training slices)
-    """
-    tensors = [torch.from_numpy(s).unsqueeze(0).unsqueeze(0).float() for s in samples]
-    samples_tensor = torch.cat(tensors, dim=0).to(dev)
-    n_samples = samples_tensor.size(0)
+    img_nc = p_sample(unet, vae, class_val=0, dev=dev, z_init=z_init, seed=seed)
+    img_ad = p_sample(unet, vae, class_val=1, dev=dev, z_init=z_init, seed=seed)
 
-    # 1. Diversity (Pairwise SSIM across all 300 pairs in a single GPU pass)
-    print(f"\n[2/3] Evaluating Pairwise SSIM (Diversity) across {n_samples} samples...")
-    idx_i, idx_j = torch.triu_indices(n_samples, n_samples, offset=1)
-    pairwise_scores = fast_ssim_batch(samples_tensor[idx_i], samples_tensor[idx_j])
-    mean_pairwise = pairwise_scores.mean().item()
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5), dpi=300)
+    ax1.imshow(img_nc, cmap="gray", vmin=0.0, vmax=1.0)
+    ax1.set_title("Normal Control (NC)", fontsize=12, fontweight="bold")
+    ax1.axis("off")
 
-    # 2. Memorization (Nearest-Neighbor SSIM against training set)
-    nn_max_scores = torch.zeros(n_samples, device=dev)
+    ax2.imshow(img_ad, cmap="gray", vmin=0.0, vmax=1.0)
+    ax2.set_title("CAlzheimer's Disease (AD)", fontsize=12, fontweight="bold")
+    ax2.axis("off")
 
-    if train_loader is not None:
-        total_batches = len(train_loader)
-        print(f"\n[3/3] Fast scanning {total_batches} training batches on {dev} for Nearest-Neighbor SSIM...")
-
-        with torch.no_grad():
-            for batch_idx, (real_batch, _) in enumerate(train_loader):
-                real_batch = real_batch.to(dev)
-                b_size = real_batch.size(0)
-
-                for i in range(n_samples):
-                    sample_rep = samples_tensor[i:i + 1].expand(b_size, 1, 256, 256)
-                    scores = fast_ssim_batch(sample_rep, real_batch)
-                    max_in_batch = scores.max()
-                    if max_in_batch > nn_max_scores[i]:
-                        nn_max_scores[i] = max_in_batch
-
-                if (batch_idx + 1) % 25 == 0 or (batch_idx + 1) == total_batches:
-                    curr_max = nn_max_scores.max().item()
-                    print(f"  Scanned batch [{batch_idx + 1:02d}/{total_batches:02d}] | Current Highest NN SSIM: {curr_max:.4f}")
-
-    mean_nn = nn_max_scores.mean().item() if n_samples > 0 else 0.0
-    max_nn = nn_max_scores.max().item() if n_samples > 0 else 0.0
-
-    # Single-line output at the end of the evaluation
-    print(f"\n[{model_type.upper()}] Pairwise SSIM (Diversity): {mean_pairwise:.4f} | NN SSIM (Memorization) Mean: {mean_nn:.4f} | Max: {max_nn:.4f}")
-    return {"pairwise_ssim": mean_pairwise, "nn_mean": mean_nn, "nn_max": max_nn}
-
-# -----------------------------------------------------------------------------
+    plt.tight_layout()
+    plt.savefig(out_file, dpi=300, bbox_inches="tight")
+    plt.close()
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device :: {device}")
 
-    train_ds = ADNIDataset(DATA_DIR, path=train_path, transform=nil_transform)
-    train_loader = DataLoader(train_ds, batch_size=64, shuffle=False, num_workers=2, pin_memory=True)
+    # Mode 1: Counterfactual class check (e.g. python predict.py --check [seed])
+    if "--check" in sys.argv or "--class-check" in sys.argv:
+        seed = 42
+        for arg in sys.argv[1:]:
+            if arg.isdigit():
+                seed = int(arg)
+                break
+        class_check(device, seed=seed)
+        return
 
-    for model_type in MODELS:
-        print("\n" + "=" * 60)
-        print(f" RUNNING EVALUATION PIPELINE: {model_type}")
-        print("=" * 60)
+    # Mode 2: Full cohort generation (e.g. python predict.py [n_per_class])
+    n_per_class = 25
+    for arg in sys.argv[1:]:
+        if arg.isdigit():
+            n_per_class = int(arg)
+            break
 
-        grid_img, samples = generate_grid(model_type=model_type, dev=device, rows=5, cols=5)
-        out_grid_filename = f"{model_type.lower()}_grid_5x5.png"
-        plt.imsave(out_grid_filename, grid_img, cmap="gray")
-        print(f"\nSaved 5x5 grid to {out_grid_filename}")
-
-        evaluate_model(model_type=model_type, samples=samples, dev=device, train_loader=train_loader)
-
+    generate_cohort(device, n_per_class=n_per_class)
 
 if __name__ == "__main__":
     main()
