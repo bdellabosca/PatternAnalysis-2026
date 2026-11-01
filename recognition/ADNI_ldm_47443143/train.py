@@ -35,7 +35,11 @@ unet_eta_min = 2e-5
 
 # Loss functions
 #------------------------------------------------------------------------------- 
-
+"""
+VAELoss
+Custom loss function for VAE, combines KL, SSIM and L1 (MAE) Loss. SSIM and 
+L1 loss values are contrasting
+"""
 class VAELoss(nn.Module):
     def __init__(self, alpha, beta):
         super().__init__()
@@ -53,6 +57,7 @@ class VAELoss(nn.Module):
         total_loss = recon_loss + self.beta * kl_loss
         return total_loss, mae_loss, kl_loss, ssim_loss
 
+# UNet Loss only uses SmoothL1Loss
 class UNetLoss(nn.Module):
     def __init__(self, unet_beta):
         super().__init__()
@@ -63,7 +68,17 @@ class UNetLoss(nn.Module):
 
 # Training loop
 #-------------------------------------------------------------------------------
-
+"""
+train_vae
+VAE training loop, attempt train set reconstructs and apply custom loss fn
+model: LDMVAE
+ldr: test set loader
+loss: VAELoss
+optim: optimiser
+dev: device (CUDA)
+epochs: number of epochs
+sched: scheduler -> cosine annealed
+"""
 def train_vae(model, ldr, loss, optim, dev, epochs, sched):
     model.train()
     start_time = time.time()
@@ -107,6 +122,18 @@ def train_vae(model, ldr, loss, optim, dev, epochs, sched):
 
         sched.step()
 
+"""
+train_unet
+training loop for unet, load latent, apply noise and attempt next timestep
+reconstruction
+model: LDMUNet
+ldr: latents loader
+loss: UNetLoss
+optim: Optimiser
+dev: device
+epochs: number of epochs
+sched: scheduler -> cosine annealed
+"""
 def train_unet(model, ldr, loss, optim, dev, epochs, sched):
     model.train()
     start_time = time.time()

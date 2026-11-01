@@ -6,7 +6,7 @@ A DCGAN implementation as a baseline for comparing the overall effectiveness of
 the ldm. Unlike the rest of the ldm this file will be monolithic and separate,
 with the intention of being separated from  the rest of the ldm as needed.
 
-Implementation mostly borrowed from a2
+Implementation mostly borrowed from previous course content
 """
 import sys
 import time
@@ -23,11 +23,17 @@ z_dim = 256
 batch_size = 64
 epochs = 50
 lr_g = 2e-4
-lr_d = 5e-5
+lr_d = 5e-5 # Descriminator learns slower (avoid overpowering generator)
 
 # Generator
 #-------------------------------------------------------------------------------
-
+"""
+Generator
+The generative architecture in the GAN, 6 layer transpose + norm + relu
+z_dim: dimension of noise vector
+out_c: out channel, single channel default (grayscale)
+f: features
+"""
 class Generator(nn.Module):
     def __init__(self, z_dim, out_c=1, f=32):
         super().__init__()
@@ -65,7 +71,12 @@ class Generator(nn.Module):
 
 # Discriminator
 #-------------------------------------------------------------------------------
-
+"""
+Discriminator
+discriminating architecture in GAN
+in_c: in channels, single channel default (grayscale)
+f: features
+"""
 class Discriminator(nn.Module):
     def __init__(self, in_c=1, f=32):
         super().__init__()
@@ -100,14 +111,27 @@ class Discriminator(nn.Module):
         return self.discrim(x).view(-1)
 
 #-------------------------------------------------------------------------------
+# generate a random noise vector, generate a slice and save
 def sample(gen, dev):
     with torch.no_grad():
         noise = torch.randn(1, z_dim, 1, 1, device=dev)
         sample = gen(noise)
+        # map [-1,1] to [0,1] from tanh
         sample = ((sample + 1.0) / 2.0).clamp(0.0, 1.0).squeeze().cpu().numpy()
         plt.imsave("gan_sample.png", sample, cmap="gray")
-    pass
 
+"""
+train_gan
+training loop for gan model, c
+gen: generator model
+discrim: discriminator mode
+ldr: training loader
+loss: loss function
+opt_g: generator optimiser
+opt_d: discriminator optimiser
+dev: device (CUDA)
+epochs: num epochs
+"""
 def train_gan(gen, discrim, ldr, loss, opt_g, opt_d, dev, epochs):
     gen.train()
     discrim.train()
@@ -119,14 +143,18 @@ def train_gan(gen, discrim, ldr, loss, opt_g, opt_d, dev, epochs):
     for epoch in range(epochs):
         total_d_loss, total_g_loss = 0.0, 0.0
         for slices, _ in ldr:
-            real_imgs = slices.to(dev) * 2.0 - 1.0
+            # map [0,1] tp [-1,1] for tanh
+            real_imgs = slices.to(dev) * 2.0 - 1.0 
             b_size = real_imgs.size(0)
             
             # ---- discriminator ----
             opt_d.zero_grad()
+            # How good do we recognise real images?
             real  = discrim(real_imgs)
+            # 0.9 to reduce certainty
             d_loss_real = loss(real, torch.full_like(real, 0.9))
 
+            # How good do we recognise generated images?
             noise = torch.randn(b_size, z_dim, 1, 1, device=dev)
             fake_imgs = gen(noise)
             fake = discrim(fake_imgs.detach())
@@ -139,6 +167,7 @@ def train_gan(gen, discrim, ldr, loss, opt_g, opt_d, dev, epochs):
             # ---- generator ----
             opt_g.zero_grad()
             fake = discrim(fake_imgs)
+            # did I do a good job?
             g_loss = loss(fake, torch.ones_like(fake))
 
             g_loss.backward()
@@ -171,6 +200,7 @@ def main():
 
     loss = nn.BCEWithLogitsLoss().to(device)
 
+    # load MRI slices
     train_ldr = get_train_ldr(sys.argv[1], batch_size=batch_size)
 
     train_gan(

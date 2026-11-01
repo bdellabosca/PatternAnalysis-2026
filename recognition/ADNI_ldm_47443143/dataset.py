@@ -8,14 +8,14 @@ training
 """
 
 import os
-import re
 import torch
 from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
 
-#NOTE: Currently there is no patient level separation on dataset
-# DO NOT USE FOR FINAL MODEL
+#NOTE: Previously the data was identified as possible at risk of data leakage,
+# according to tutors the preprocessing supplied is sufficient
+# comm -12 <(ls -R1 train | cut -d'_' -f1 | sort -u) <(ls -R1 test | cut -d'_' -f1 | sort -u)
 
 # Parameters
 #-------------------------------------------------------------------------------
@@ -32,15 +32,16 @@ CLASSES = {"NC": 0.0, "AD": 1.0}
 
 # Transforms
 #-------------------------------------------------------------------------------
-
+# Move the slices around a bit to avoid memorisation
 augment = transforms.Compose([
-    transforms.Pad((0,8), fill=0),
+    transforms.Pad((0,8), fill=0), # dimension mismatch solution 240 actual
     transforms.RandomRotation(degrees=rotation, fill=0),
     transforms.RandomAffine(degrees=0, translate=translation, fill=0),
     transforms.ColorJitter(brightness=brightness, contrast=contrast),
     transforms.ToTensor()
 ])
 
+# Just pad and turn to tensor
 nil_transform = transforms.Compose([
     transforms.Pad((0,8), fill=0),
     transforms.ToTensor()
@@ -48,7 +49,14 @@ nil_transform = transforms.Compose([
 
 # Datasets
 #-------------------------------------------------------------------------------
-
+"""
+ADNIDataset
+the ADNI dataset requires single slice sagittal MRI with the classification
+extracted from the file path
+base: dir location
+path: either train_path, or test_path from expected directory structure
+transform: An augmentation transform to avoid aggressive learning over epochs
+"""
 class ADNIDataset(Dataset):
     def __init__(self, base, path, transform):
         self.transform = transform
@@ -67,6 +75,7 @@ class ADNIDataset(Dataset):
     def __len__(self):
         return len(self.slices)
 
+    # return slice and classification
     def __getitem__(self, ix):
         path, classification = self.slices[ix]
         slice = Image.open(path).convert("L")
@@ -75,6 +84,13 @@ class ADNIDataset(Dataset):
         label = torch.tensor(CLASSES[classification], dtype=torch.long)
         return slice, label
 
+"""
+ADNILatents
+A small dataset implementation for returning the latent encoding and class for
+UNet training
+latents: latent space encodings
+classes: classifications
+"""
 class ADNILatents(Dataset):
     def __init__(self, latents, classes):
         self.latents = latents
@@ -88,18 +104,20 @@ class ADNILatents(Dataset):
 
 # Loaders
 #-------------------------------------------------------------------------------
-
+# test set
 def get_test_ldr(base, batch_size=32, num_workers=4):
+    # no need to augment
     test_ds = ADNIDataset(base, path=test_path, transform=nil_transform)
     test_ldr = DataLoader(
         test_ds,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=False,
         num_workers=num_workers,
         pin_memory=True
     )
     return test_ldr 
 
+# train set
 def get_train_ldr(base, batch_size=32, num_workers=4): 
     train_ds = ADNIDataset(base, path=train_path, transform=augment)
     train_ldr = DataLoader(
@@ -113,6 +131,7 @@ def get_train_ldr(base, batch_size=32, num_workers=4):
 
 def get_latents_ldr(vae, ldr, dev, batch_size=32, shuffle=True):
     with torch.no_grad():
+        # requires a pretrained VAE
         vae.eval()
         latents, classes = [], []
  
@@ -125,6 +144,7 @@ def get_latents_ldr(vae, ldr, dev, batch_size=32, shuffle=True):
         latents = torch.cat(latents, dim=0)
         classes = torch.cat(classes, dim=0)
 
+        # rescale latents depending on latent space distribution
         raw_std = latents.std().item()
         scale = 1.0 / raw_std
         print(f"[Latent Norm] Raw std: {raw_std:.4f} | Scale: {scale:.4f}")
